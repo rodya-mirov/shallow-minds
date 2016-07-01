@@ -90,7 +90,29 @@ def forward_prop(weights, biases, activations, input_data):
     
     return x, z, y
 
-
+def forward_prop_dropout(weights, biases, activations, input_data, drop_rates):
+    
+    l = len(weights)
+    
+    x = [0] * l # input to level i
+    z = [0] * l # un-activated output of level i
+    y = [0] * l # activated output of level i
+    mask = [0] * l # dropout mask for the input to level i
+    
+    # Apply a dropout mask and scaling to x[0]
+    mask[0] = np.random.random(input_data.shape) > drop_rates[0]
+    x[0] = input_data * (mask[0]) / (1-drop_rates[0])
+    
+    for i in range(0, l):
+        expanded_bias = np.ones((x[i].shape[0], 1)) * biases[i]
+        z[i] = np.dot(x[i], weights[i]) + expanded_bias
+        y[i] = activations[i](z[i])
+        
+        if i < l-1:
+            mask[i+1] = np.random.random(y[i].shape) > drop_rates[i+1]
+            x[i+1] = y[i] * (mask[i+1]) / (1-drop_rates[i+1])
+    
+    return x, z, y, mask
 
 #############################################################################
 ### ACTIVATION FUNCTIONS                                                  ###
@@ -279,8 +301,8 @@ def get_mini_batches(batch_size, X, Y):
 
 
 def back_prop(weights, biases, acts, cost_function,
-        train_X, train_Y,
-        x, y, z):
+              train_X, train_Y,
+              x, y, z):
     L = len(weights) # number of layers
     
     cost_diff = cost_function(y[-1], train_Y, diff=True)
@@ -302,6 +324,41 @@ def back_prop(weights, biases, acts, cost_function,
     
     for i in range(0, L):
         scaled_grad = bp_grad[i] * acts[i](z[i], y[i], diff=True)
+
+        bp_grad_w[i] = np.dot(x[i].T, scaled_grad)
+        
+        relevant_ones = np.ones((1, x[i].shape[0]))
+        bp_grad_b[i] = np.dot(relevant_ones, scaled_grad)
+        
+    return bp_grad_w, bp_grad_b
+
+    def back_prop_dropout(weights, biases, acts, cost_function,
+                          train_X, train_Y,
+                          x, y, z, masks):
+    L = len(weights) # number of layers
+    
+    cost_diff = cost_function(y[-1], train_Y, diff=True)
+    
+    # Gradient of cost at each level
+    bp_grad = [0] * L
+    
+    # The last level is special
+    bp_grad[L-1] = cost_diff * acts[L-1](z[L-1], y[L-1], diff=True)
+    
+    # The rest of the levels are just gotten by propagating backward
+    for i in range(L-2, -1, -1):
+        scaled_grad = bp_grad[i+1] * acts[i+1](z[i+1], y[i+1], diff=True)
+        bp_grad[i] = np.dot(scaled_grad, weights[i+1].T)
+    
+    # Now adjust for the weights and biases themselves
+    bp_grad_w = [0] * L
+    bp_grad_b = [0] * L
+    
+    for i in range(0, L):
+        if i < L-1:
+            scaled_grad = bp_grad[i] * acts[i](z[i], y[i], diff=True) * masks[i+1]
+        else:
+            scaled_grad = bp_grad[i] * acts[i](z[i], y[i], diff=True)
 
         bp_grad_w[i] = np.dot(x[i].T, scaled_grad)
         
